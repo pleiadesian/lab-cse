@@ -47,10 +47,8 @@ block_manager::alloc_block()
       for (int j = 0 ; j < 8 ; j++) {
         if (!(buf[i] & (1<<j))) {
           blockid = 8 * i + j + (bitmap_pos - 2) * BPB;
-          printf("---alloc blockid %d %x\n", blockid, buf[i]);
           buf[i] = buf[i] | (1<<j);
           write_block(bitmap_pos, buf);
-          printf("---alloc blockid %d %x\n", blockid, buf[i]);
           return blockid;
         }
       }
@@ -187,8 +185,17 @@ inode_manager::free_inode(uint32_t inum)
    * note: you need to check if the inode is already a freed one;
    * if not, clear it, and remember to write back to disk.
    */
+  if (inum < 1 || inum > INODE_NUM) {
+    return;
+  }
 
-  return;
+  char buf[BLOCK_SIZE];
+  int inode_pos = IBLOCK(inum, BLOCK_NUM);
+
+  bm->read_block(inode_pos, buf);
+  inode_t *inode = (inode_t *)buf + (inum - 1) % IPB;
+  inode->type = 0;
+  bm->write_block(inode_pos, buf);
 }
 
 
@@ -263,7 +270,6 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
 
   *size = inode->size;
   *buf_out = (char *)malloc(inode->size);
-  printf("---inodesize:%d\n",inode->size);
 
   if (*buf_out == NULL) {
     printf("error in malloc\n");
@@ -274,15 +280,11 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
   whole_block_num = inode->size / BLOCK_SIZE;
   data_block_num = (inode->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
   last_block_size = inode->size % BLOCK_SIZE;
-  printf("---%d, %d, %d\n", whole_block_num, data_block_num, last_block_size);
-
 
   /* read data block ids from only direct blocks? */
   if (data_block_num <= NDIRECT) {
-    printf("---direct\n");
     memcpy(blockids, inode->blocks, data_block_num * sizeof(blockid_t));
   } else {
-    printf("---indirect\n");
     char buf[BLOCK_SIZE];
     memcpy(blockids, inode->blocks, NDIRECT * sizeof(blockid_t));
     bm->read_block(inode->blocks[NDIRECT], buf);
@@ -298,7 +300,6 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
   if (last_block_size > 0) {
     char buf[BLOCK_SIZE];
     bm->read_block(blockids[whole_block_num], buf);
-    printf("--- read from block %d : %s\n", blockids[whole_block_num], buf);
     memcpy(*buf_out + whole_block_num * BLOCK_SIZE, buf, last_block_size);
   }
 
@@ -319,7 +320,6 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
    * you need to consider the situation when the size of buf 
    * is larger or smaller than the size of original inode
    */
-  printf("write %d %s", inum, buf);
 
   blockid_t blockids[MAXFILE];
   int whole_block_num, old_block_num, new_block_num, last_block_size;
@@ -369,7 +369,6 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
   if (last_block_size > 0) {
     char temp_buf[BLOCK_SIZE];
     memcpy(temp_buf, buf + whole_block_num * BLOCK_SIZE, last_block_size);
-    printf("---writebuf:%s to block %d\n",temp_buf, blockids[whole_block_num]);
     bm->write_block(blockids[whole_block_num], temp_buf);
   }
 
@@ -420,6 +419,35 @@ inode_manager::remove_file(uint32_t inum)
    * your code goes here
    * note: you need to consider about both the data block and inode of the file
    */
-  
-  return;
+
+  inode_t *inode = get_inode(inum);
+
+  if (inode == NULL) {
+    return;
+  }
+
+  blockid_t blockids[MAXFILE];
+
+  // find data block ids
+  char buf[MAXFILE];
+  int data_block_num = (inode->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+  if (data_block_num < NDIRECT) {
+    memcpy(blockids, inode->blocks, data_block_num * sizeof(blockid_t));
+  } else {
+    memcpy(blockids, inode->blocks, NDIRECT * sizeof(blockid_t));
+    bm->read_block(inode->blocks[NDIRECT], buf);
+    memcpy(blockids + NDIRECT, buf, (data_block_num - NDIRECT));
+  }
+
+  // free blocks
+  for (int i = 0 ; i < data_block_num ; i++) {
+    bm->free_block(blockids[i]);
+  }
+
+  if (data_block_num > NDIRECT) {
+    bm->free_block(inode->blocks[NDIRECT]);
+  }
+
+  free_inode(inum);
+  free(inode);
 }

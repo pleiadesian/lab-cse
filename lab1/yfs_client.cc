@@ -145,6 +145,50 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
      * after create file or dir, you must remember to modify the parent infomation.
      */
 
+    /* check parent node */
+    if (!isdir(parent)) {
+        return IOERR;
+    }
+
+    /* check filename */
+    if (name == NULL) {
+        return IOERR;
+    }
+    std::string filename = std::string(name);
+    if (filename.empty() || !filename.find('/') == std::string::npos || !filename.find('\0') == std::string::npos) {
+        return IOERR;
+    }
+
+    std::list<dirent> filelist;
+    r = readdir(parent, filelist);
+    if (r != OK) {
+        return r;
+    }
+
+    bool found = false;
+    inum temp_inum;
+    lookup(parent, name, found, temp_inum);
+    if (found) {
+        return EXIST;
+    }
+
+    dirent de;
+    de.name = filename;
+    if (ec->create(2, ino_out)) {
+        return IOERR;
+    }
+    de.inum = ino_out;
+
+    filelist.push_back(de);
+    std::ostringstream oss;
+    for (std::list<dirent>::iterator it = filelist.begin() ; it != filelist.end() ; it++) {
+        oss << it->name << '\0' << it->inum << '\0';
+    }
+    std::cout<< "\n\n" << oss.str() << "\n\n";
+    if (ec->put(parent, oss.str()) != OK) {
+        return IOERR;
+    }
+
     return r;
 }
 
@@ -172,6 +216,28 @@ yfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
      * note: lookup file from parent dir according to name;
      * you should design the format of directory content.
      */
+    std::string buf, sname, sinum;
+    if (ec->get(parent, buf) != OK) {
+        return IOERR;
+    }
+    std::cout<<"\n\ndir:"<<buf<<"\n\n";
+
+    std::stringstream ss(buf);
+    std::string filename = std::string(name);
+    found = false;
+    while(getline(ss, sname, '\0')) {
+        if (!getline(ss, sinum, '\0')) {
+            break;
+        }
+        dirent de;
+        de.name = sname;
+        de.inum = atoi(sinum.c_str());
+        if (filename == sname) {
+            found = true;
+            ino_out = de.inum;
+            break;
+        }
+    }
 
     return r;
 }
@@ -186,6 +252,21 @@ yfs_client::readdir(inum dir, std::list<dirent> &list)
      * note: you should parse the dirctory content using your defined format,
      * and push the dirents to the list.
      */
+    std::string buf, sname, sinum;
+    if (ec->get(dir, buf) != OK) {
+        return IOERR;
+    }
+
+    std::stringstream ss(buf);
+    while(getline(ss, sname, '\0')) {
+        if (!getline(ss, sinum, '\0')) {
+            break;
+        }
+        dirent de;
+        de.name = sname;
+        de.inum = atoi(sinum.c_str());
+        list.push_back(de);
+    }
 
     return r;
 }
