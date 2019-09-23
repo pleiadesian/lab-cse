@@ -443,6 +443,44 @@ fuseserver_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 }
 
 void
+fuseserver_symlink(fuse_req_t req, const char *name, fuse_ino_t parent, const char *link) {
+    yfs_client::inum parent_inum = (yfs_client::inum)parent;
+    yfs_client::inum inum_out;
+    fuse_entry_param e;
+
+    int r;
+    if ((r = yfs->symlink(parent_inum, name, link, inum_out)) == yfs_client::OK) {
+        e.ino = inum_out;
+        e.attr_timeout = 0.0;
+        e.entry_timeout = 0.0;
+        e.generation = 0;
+        if (getattr(inum_out, e.attr) != yfs_client::OK) {
+            fuse_reply_err(req, ENOENT);
+            return;
+        }
+        fuse_reply_entry(req, &e);
+    } else {
+        if (r == yfs_client::EXIST) {
+            fuse_reply_err(req, EEXIST);
+        } else {
+            fuse_reply_err(req, ENOENT);
+        }
+    }
+}
+
+void
+fuseserver_readlink(fuse_req_t req, fuse_ino_t ino) {
+    yfs_client::inum inum = ino;
+
+    std::string buf;
+    if (yfs->readlink(inum, buf) == yfs_client::OK) {
+        fuse_reply_readlink(req, buf.c_str());
+    } else {
+        fuse_reply_err(req, ENOENT);
+    }
+}
+
+void
 fuseserver_statfs(fuse_req_t req)
 {
     struct statvfs buf;
@@ -499,6 +537,8 @@ main(int argc, char *argv[])
     fuseserver_oper.setattr    = fuseserver_setattr;
     fuseserver_oper.unlink     = fuseserver_unlink;
     fuseserver_oper.mkdir      = fuseserver_mkdir;
+    fuseserver_oper.symlink    = fuseserver_symlink;
+    fuseserver_oper.readlink   = fuseserver_readlink;
     /** Your code here for Lab.
      * you may want to add
      * routines here to implement symbolic link,
