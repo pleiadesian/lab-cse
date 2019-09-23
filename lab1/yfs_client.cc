@@ -131,6 +131,35 @@ yfs_client::setattr(inum ino, size_t size)
      * according to the size (<, =, or >) content length.
      */
 
+    std::string buf;
+    if (ec->get(ino, buf) != extent_protocol::OK) {
+        return IOERR;
+    }
+
+    buf.resize(size);
+//    size_t curr_size = buf.size();
+//
+//    if (size == 0) {
+//        ec->remove(ino);
+//        return r;
+//    }
+//
+//    if (curr_size > size) {
+//        buf = buf.substr(0, size);
+//    }
+//
+//    if (curr_size < size) {
+//        int diff = size - curr_size;
+//        while (diff > 0) {
+//            buf += '\0';
+//            diff--;
+//        }
+//    }
+
+    if (ec->put(ino, buf) != extent_protocol::OK) {
+        return IOERR;
+    }
+
     return r;
 }
 
@@ -144,12 +173,14 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
      * note: lookup is what you need to check if file exist;
      * after create file or dir, you must remember to modify the parent infomation.
      */
-
+    printf("\n\n\n%s\n/////////", name);
     /* check parent node */
     if (!isdir(parent)) {
+        printf("-------not dir\n");
         return IOERR;
     }
 
+    printf("\n1\n");
     /* check filename */
     if (name == NULL) {
         return IOERR;
@@ -159,10 +190,9 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
         return IOERR;
     }
 
-    std::list<dirent> filelist;
-    r = readdir(parent, filelist);
-    if (r != OK) {
-        return r;
+    std::string buf;
+    if (ec->get(parent, buf) != extent_protocol::OK) {
+        return IOERR;
     }
 
     bool found = false;
@@ -172,20 +202,24 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
         return EXIST;
     }
 
-    dirent de;
-    de.name = filename;
-    if (ec->create(2, ino_out)) {
+    /* create a new file */
+    if (ec->create(extent_protocol::T_FILE, ino_out) != extent_protocol::OK) {
         return IOERR;
     }
-    de.inum = ino_out;
 
-    filelist.push_back(de);
-    std::ostringstream oss;
-    for (std::list<dirent>::iterator it = filelist.begin() ; it != filelist.end() ; it++) {
-        oss << it->name << '\0' << it->inum << '\0';
-    }
-    std::cout<< "\n\n" << oss.str() << "\n\n";
-    if (ec->put(parent, oss.str()) != OK) {
+    /* generate fix size direct entry */
+    std::string sde;
+    fix_dir_entry fde;
+    fde.name_size = (int) strlen(name);
+    memcpy(fde.name, name, fde.name_size);
+    fde.inum = ino_out;
+
+    /* convert entry to string */
+    sde.assign((char *)&fde, sizeof(fix_dir_entry));
+    buf += sde;
+
+    /* write entry to parent dir */
+    if (ec->put(parent, buf) != extent_protocol::OK) {
         return IOERR;
     }
 
@@ -202,6 +236,39 @@ yfs_client::mkdir(inum parent, const char *name, mode_t mode, inum &ino_out)
      * note: lookup is what you need to check if directory exist;
      * after create file or dir, you must remember to modify the parent infomation.
      */
+    bool exist = false;
+    inum inum_out;
+    lookup(parent, name, exist, inum_out);
+    if (exist) {
+        return EXIST;
+    }
+
+    /* create a new dir */
+    if (ec->create(extent_protocol::T_DIR, ino_out) != extent_protocol::OK) {
+        return IOERR;
+    }
+
+    /* get parent dir entries */
+    std::string buf;
+    if (ec->get(parent, buf) != extent_protocol::OK) {
+        return IOERR;
+    }
+
+    /* generate fix size direct entry */
+    std::string sde;
+    fix_dir_entry fde;
+    fde.name_size = (int) strlen(name);
+    memcpy(fde.name, name, fde.name_size);
+    fde.inum = ino_out;
+
+    /* convert entry to string */
+    sde.assign((char *)&fde, sizeof(fix_dir_entry));
+    buf += sde;
+
+    /* write entry to parent dir */
+    if (ec->put(parent, buf) != extent_protocol::OK) {
+        return IOERR;
+    }
 
     return r;
 }
@@ -216,28 +283,27 @@ yfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
      * note: lookup file from parent dir according to name;
      * you should design the format of directory content.
      */
-    std::string buf, sname, sinum;
-    if (ec->get(parent, buf) != OK) {
-        return IOERR;
-    }
-    std::cout<<"\n\ndir:"<<buf<<"\n\n";
+    printf("\nlookup\n%s\n\n", name);
+    std::list<dirent> de_list;
+    readdir(parent, de_list);
 
-    std::stringstream ss(buf);
-    std::string filename = std::string(name);
+    printf("\npass readdir\n");
+
     found = false;
-    while(getline(ss, sname, '\0')) {
-        if (!getline(ss, sinum, '\0')) {
-            break;
-        }
-        dirent de;
-        de.name = sname;
-        de.inum = atoi(sinum.c_str());
-        if (filename == sname) {
+    for (std::list<dirent>::iterator it = de_list.begin() ; it != de_list.end() ; it++) {
+        printf("\nlopping\n");
+        std::string sname;
+//        printf("------cmp\n%s\n---------\n%s\n", it->name.c_str(), name);
+        if (it->name == sname.assign(name, strlen(name))) {
             found = true;
-            ino_out = de.inum;
+            ino_out = it->inum;
             break;
         }
+
     }
+
+    printf("\nend loop\n");
+
 
     return r;
 }
@@ -252,22 +318,41 @@ yfs_client::readdir(inum dir, std::list<dirent> &list)
      * note: you should parse the dirctory content using your defined format,
      * and push the dirents to the list.
      */
-    std::string buf, sname, sinum;
-    if (ec->get(dir, buf) != OK) {
+    printf("\na\n");
+    std::string buf, snamesize, sname, sinum;
+    extent_protocol::attr attr;
+    if (ec->get(dir, buf) != extent_protocol::OK || ec->getattr(dir, attr) != extent_protocol::OK) {
+        printf("-------getattr error\n");
         return IOERR;
     }
 
-    std::stringstream ss(buf);
-    while(getline(ss, sname, '\0')) {
-        if (!getline(ss, sinum, '\0')) {
-            break;
-        }
+    printf("\nb\n");
+    if (attr.type != extent_protocol::T_DIR) {
+        printf("-------type error\n");
+        return IOERR;
+    }
+
+    attr.atime = (unsigned int)time(NULL);
+
+    const char *char_buf = buf.c_str();
+    int filesize = (int)buf.size();
+    int entry_num = filesize / sizeof(fix_dir_entry);
+
+    printf("\nc sizeof parent:%d sizeof charbuf:%d entrysize:%d  entry num:%d\n", attr.size, (int)strlen(char_buf), (int)sizeof(fix_dir_entry), (int)entry_num);
+    printf("\n-------------\n %s \n\n", char_buf);
+    for (int i = 0 ; i < entry_num ; i++) {
+        printf("\nd\n");
+        fix_dir_entry fde;
+        memcpy(&fde, char_buf + i * sizeof(fix_dir_entry), sizeof(fix_dir_entry));
         dirent de;
-        de.name = sname;
-        de.inum = atoi(sinum.c_str());
+        printf("\ne name:%s size:%d\n", fde.name, fde.name_size);
+        de.name.assign(fde.name, fde.name_size);
+        de.inum = fde.inum;
+        printf("\nf\n");
         list.push_back(de);
     }
 
+    printf("\nd\n");
     return r;
 }
 
@@ -280,6 +365,17 @@ yfs_client::read(inum ino, size_t size, off_t off, std::string &data)
      * your code goes here.
      * note: read using ec->get().
      */
+    std::string buf;
+    if (ec->get(ino, buf) != extent_protocol::OK) {
+        return IOERR;
+    }
+
+    data.erase();
+    if (off >= (off_t)buf.length()) {
+        return r;
+    }
+
+    data = buf.substr(off, size);
 
     return r;
 }
@@ -296,6 +392,28 @@ yfs_client::write(inum ino, size_t size, off_t off, const char *data,
      * when off > length of original file, fill the holes with '\0'.
      */
 
+    std::string buf;
+    if (ec->get(ino, buf) != extent_protocol::OK) {
+        return IOERR;
+    }
+
+    std::string sdata;
+    sdata.assign(data, size);
+
+    if (off > (off_t)buf.size()) {
+        size_t diff = (size_t)off - buf.size();
+        buf.resize(off + size, '\0');
+        buf.replace(off, size, sdata);
+        bytes_written = diff + size;
+    } else {
+        buf.replace(off, size, sdata);
+        bytes_written = size;
+    }
+
+    if (ec->put(ino, buf) != extent_protocol::OK) {
+        return IOERR;
+    }
+
     return r;
 }
 
@@ -308,6 +426,97 @@ int yfs_client::unlink(inum parent,const char *name)
      * note: you should remove the file using ec->remove,
      * and update the parent directory content.
      */
+    /* check if file exists */
+    bool exist = false;
+    inum inum_out;
+    lookup(parent, name, exist, inum_out);
+    if (!exist) {
+        return NOENT;
+    }
+
+    if (ec->remove(inum_out) != extent_protocol::OK) {
+        return IOERR;
+    }
+
+    std::list<dirent> de_list;
+    readdir(parent, de_list);
+    std::string buf;
+    for (std::list<dirent>::iterator it = de_list.begin() ; it != de_list.end() ; it++) {
+        /* pass the removed entry */
+        if (it->inum == inum_out) {
+            continue;
+        }
+
+        /* generate fix size direct entry */
+        std::string sde;
+        fix_dir_entry fde;
+        fde.name_size = (int)it->name.size();
+        memcpy(fde.name, it->name.c_str(), fde.name_size);
+        fde.inum = it->inum;
+
+        /* convert entry to string */
+        sde.assign((char *)&fde, sizeof(fix_dir_entry));
+        buf += sde;
+    }
+
+    /* write entry to parent dir */
+    if (ec->put(parent, buf) != extent_protocol::OK) {
+        return IOERR;
+    }
+
+    return r;
+}
+
+int yfs_client::symlink(inum parent, const char *name, const char *link, inum &ino_out) {
+    int r = OK;
+
+    bool exist = false;
+    inum inum_out;
+    lookup(parent, name, exist, inum_out);
+    if (exist) {
+        return EXIST;
+    }
+
+    /* create a new dir */
+    if (ec->create(extent_protocol::T_SYMLINK, ino_out) != extent_protocol::OK) {
+        return IOERR;
+    }
+
+    /* write link to symlink file */
+    std::string slink = std::string(link);
+    ec->put(ino_out, slink);
+
+    /* get parent dir entries */
+    std::string buf;
+    if (ec->get(parent, buf) != extent_protocol::OK) {
+        return IOERR;
+    }
+
+    /* generate fix size direct entry */
+    std::string sde;
+    fix_dir_entry fde;
+    fde.name_size = (int)strlen(name);
+    memcpy(fde.name, name, fde.name_size);
+    fde.inum = ino_out;
+
+    /* convert entry to string */
+    sde.assign((char *)&fde, sizeof(fix_dir_entry));
+    buf += sde;
+
+    /* write entry to parent dir */
+    if (ec->put(parent, buf) != extent_protocol::OK) {
+        return IOERR;
+    }
+
+    return r;
+}
+
+int yfs_client::readlink(inum ino, std::string &data) {
+    int r = OK;
+
+    if (ec->get(ino, data) != extent_protocol::OK) {
+        return IOERR;
+    }
 
     return r;
 }
