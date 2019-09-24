@@ -58,7 +58,7 @@ getattr(yfs_client::inum inum, struct stat &st)
         st.st_ctime = info.ctime;
         st.st_size = info.size;
         printf("   getattr -> %llu\n", info.size);
-    } else {
+    } else if (yfs->isdir(inum)){
         yfs_client::dirinfo info;
         ret = yfs->getdir(inum, info);
         if(ret != yfs_client::OK)
@@ -69,6 +69,18 @@ getattr(yfs_client::inum inum, struct stat &st)
         st.st_mtime = info.mtime;
         st.st_ctime = info.ctime;
         printf("   getattr -> %lu %lu %lu\n", info.atime, info.mtime, info.ctime);
+    } else {
+        yfs_client::fileinfo info;
+        ret = yfs->getfile(inum, info);
+        if(ret != yfs_client::OK)
+            return ret;
+        st.st_mode = S_IFLNK | 0777;
+        st.st_nlink = 1;
+        st.st_atime = info.atime;
+        st.st_mtime = info.mtime;
+        st.st_ctime = info.ctime;
+        st.st_size = info.size;
+        printf("   getattr -> %llu\n", info.size);
     }
     return yfs_client::OK;
 }
@@ -443,12 +455,13 @@ fuseserver_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 }
 
 void
-fuseserver_symlink(fuse_req_t req, const char *name, fuse_ino_t parent, const char *link) {
+fuseserver_symlink(fuse_req_t req, const char *link, fuse_ino_t parent, const char *name) {
     yfs_client::inum parent_inum = (yfs_client::inum)parent;
+
     yfs_client::inum inum_out;
     fuse_entry_param e;
 
-    int r;
+    yfs_client::status r;
     if ((r = yfs->symlink(parent_inum, name, link, inum_out)) == yfs_client::OK) {
         e.ino = inum_out;
         e.attr_timeout = 0.0;

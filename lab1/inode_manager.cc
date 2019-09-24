@@ -41,6 +41,7 @@ block_manager::alloc_block()
   int blockid = -1;
   char buf[BLOCK_SIZE];
 
+  // scan bitmap and set the first 0
   while (blockid == -1 && bitmap_pos < BLOCK_NUM/BPB + 2) {
     read_block(bitmap_pos, buf);
     for (int i = 0 ; i < BLOCK_SIZE ; i++) {
@@ -56,7 +57,6 @@ block_manager::alloc_block()
     bitmap_pos++;
   }
 
-  printf("no available block\n");
   exit(-1);
 }
 
@@ -71,11 +71,13 @@ block_manager::free_block(uint32_t id)
     return;
   }
 
+  // get block position in bitmap
   char buf[BLOCK_SIZE];
   int bitmap_pos = BBLOCK(id);
   int bit_pos = id % BPB;
   int byte_pos = bit_pos / 8;
 
+  // reset the bit
   read_block(bitmap_pos, buf);
   buf[byte_pos] = buf[byte_pos] & ~(1 << (bit_pos % 8));
   write_block(bitmap_pos, buf);
@@ -155,6 +157,7 @@ inode_manager::alloc_inode(uint32_t type)
   char buf[BLOCK_SIZE];
   inode_t *inode;
 
+  // get first free inode
   do{
     inode_pos++;
     iblock_pos = IBLOCK(inode_pos, bm->sb.nblocks);
@@ -166,6 +169,7 @@ inode_manager::alloc_inode(uint32_t type)
     exit(-1);
   }
 
+  // set inode
   bzero(inode, sizeof(inode_t));
   inode->type = type;
   inode->size = 0;
@@ -272,16 +276,15 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
   *buf_out = (char *)malloc(inode->size);
 
   if (*buf_out == NULL) {
-    printf("error in malloc\n");
     exit(-1);
   }
 
-  /* get meta data from inode */
+  // get meta data from inode
   whole_block_num = inode->size / BLOCK_SIZE;
   data_block_num = (inode->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
   last_block_size = inode->size % BLOCK_SIZE;
 
-  /* read data block ids from only direct blocks? */
+  // read data block ids from only direct blocks?
   if (data_block_num <= NDIRECT) {
     memcpy(blockids, inode->blocks, data_block_num * sizeof(blockid_t));
   } else {
@@ -292,51 +295,24 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
   }
 
 
-  /* read whole data blocks */
+  // read whole data blocks
   for (int i = 0 ; i < whole_block_num ; i++) {
     bm->read_block(blockids[i], *buf_out + i * BLOCK_SIZE);
   }
 
+  // read last block
   if (last_block_size > 0) {
     char buf[BLOCK_SIZE];
     bm->read_block(blockids[whole_block_num], buf);
     memcpy(*buf_out + whole_block_num * BLOCK_SIZE, buf, last_block_size);
   }
 
-  /* set atime */
+  // set atime
   inode->atime = (unsigned int)time(NULL);
   put_inode(inum, inode);
 
   free(inode);
 }
-
-///////////////
-void inode_manager::get_blockids(const inode_t *ino, blockid_t *bids, int cnt) // Get first cnt block ids from an inode.
-{
-    char buf[BLOCK_SIZE];
-
-    if (cnt <= NDIRECT) { // No indirect blocks.
-        memcpy(bids, ino->blocks, cnt * sizeof(blockid_t));
-    } else { // Involves an indirect block. Get direct blocks and more blocks from the indirect block.
-        memcpy(bids, ino->blocks, NDIRECT * sizeof(blockid_t));
-        bm->read_block(ino->blocks[NDIRECT], buf);
-        memcpy(bids + NDIRECT, buf, (cnt - NDIRECT) * sizeof(blockid_t));
-    }
-}
-
-void inode_manager::set_blockids(inode_t *ino, const blockid_t *bids, int cnt) // Set cnt block ids to an inode.
-{
-    char buf[BLOCK_SIZE];
-
-    if (cnt <= NDIRECT) { // No indirect blocks.
-        memcpy(ino->blocks, bids, cnt * sizeof(blockid_t));
-    } else { // Need an indirect block. Set direct blocks and more blocks to the indirect block.
-        memcpy(ino->blocks, bids, NDIRECT * sizeof(blockid_t));
-        memcpy(buf, bids + NDIRECT, (cnt - NDIRECT) * sizeof(blockid_t));
-        bm->write_block(ino->blocks[NDIRECT], buf);
-    }
-}
-///////////////
 
 /* alloc/free blocks if needed */
 void
@@ -348,6 +324,11 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
    * you need to consider the situation when the size of buf 
    * is larger or smaller than the size of original inode
    */
+
+  if (buf == NULL) {
+    return;
+  }
+
   blockid_t blockids[MAXFILE];
   int whole_block_num, old_block_num, new_block_num, last_block_size;
 
@@ -357,14 +338,14 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
     return;
   }
 
-  /* get meta data from inode */
+  // get meta data from inode
   old_block_num = (inode->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
   new_block_num = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
   whole_block_num = size / BLOCK_SIZE;
   last_block_size = size % BLOCK_SIZE;
 
-  /* get inode */
-  if (new_block_num <= NDIRECT) {
+  // get inode
+  if (old_block_num <= NDIRECT) {
       memcpy(blockids, inode->blocks, old_block_num * sizeof(blockid_t));
   } else {
       char temp_buf[BLOCK_SIZE];
@@ -373,43 +354,45 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
       memcpy(blockids + NDIRECT, temp_buf, (old_block_num - NDIRECT) * sizeof(blockid_t));
   }
 
-  /* adjust blocks */
+  // adjust blocks
   if (old_block_num < new_block_num) {
-    /* need to alloc new block */
+    // need to alloc new block
     int diff = new_block_num - old_block_num;
     for (int i = 0 ; i < diff ; i++) {
       blockids[old_block_num + i] = bm->alloc_block();
     }
 
-    /* need to alloc indirect block */
+    // need to alloc indirect block
     if (old_block_num <= NDIRECT && new_block_num > NDIRECT) {
       inode->blocks[NDIRECT] = bm->alloc_block();
     }
 
   } else if (old_block_num > new_block_num) {
-    /* need to free old block */
+    // need to free old block
     int diff = old_block_num - new_block_num;
     for (int i = 0; i < diff ; i++) {
       bm->free_block(blockids[old_block_num-i-1]);
     }
 
-    /* need to free indirect block */
+    // need to free indirect block
     if (old_block_num > NDIRECT && new_block_num <= NDIRECT) {
       bm->free_block(inode->blocks[NDIRECT]);
     }
   }
 
+  // write data to whole blocks
   for (int i = 0 ; i < whole_block_num ; i++) {
     bm->write_block(blockids[i], buf + i * BLOCK_SIZE);
   }
 
+  // write data to last block
   if (last_block_size > 0) {
     char temp_buf[BLOCK_SIZE];
     memcpy(temp_buf, buf + whole_block_num * BLOCK_SIZE, last_block_size);
     bm->write_block(blockids[whole_block_num], temp_buf);
   }
 
-  /* set inode */
+  // set inode
   if (new_block_num <= NDIRECT) {
     memcpy(inode->blocks, blockids, new_block_num * sizeof(blockid_t));
   } else {
