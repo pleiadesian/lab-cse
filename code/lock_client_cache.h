@@ -29,17 +29,17 @@ class lock_client_cache : public lock_client {
   std::string id;
 
   pthread_mutex_t lock;
-  enum lock_status { OK, NOT_CACHED, LOCKED };
+  enum lock_status { NONE, FREE, LOCKED, ACQUIRING, RELEASING };
 
   struct lock_cache {
     int revoke;
+    int retry;
     enum lock_status stat;
-    list<pthread_cond_t *> thread_queue;
+    std::list<pthread_cond_t *> thread_queue;
+    pthread_cond_t retry_cond;
   };
 
   std::map<lock_protocol::lockid_t, struct lock_cache *> lock_list;
-
-  lock_protocol::status block_on_lock(lock_protocol::lockid_t);
 
  public:
   static int last_port;
