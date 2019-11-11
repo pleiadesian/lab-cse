@@ -9,6 +9,7 @@
 
 //#include "yfs_protocol.h"
 #include "extent_client.h"
+#include "extent_client_cache.h"
 #include <vector>
 
 #define MAX_FILENAME 100

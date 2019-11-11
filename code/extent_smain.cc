@@ -4,7 +4,10 @@
 #include <stdio.h>
 #include "extent_server.h"
 #include <unistd.h>
+#include "extent_server_cache.h"
 // Main loop of extent server
+
+#define LAB4
 
 int
 main(int argc, char *argv[])
@@ -24,13 +27,22 @@ main(int argc, char *argv[])
   }
 
   rpcs server(atoi(argv[1]), count);
-  extent_server ls;
 
+#ifdef LAB4
+  extent_server_cache ls;
+  server.reg(extent_protocol::get, &ls, &extent_server_cache::get);
+  server.reg(extent_protocol::getattr, &ls, &extent_server_cache::getattr);
+  server.reg(extent_protocol::put, &ls, &extent_server_cache::put);
+  server.reg(extent_protocol::remove, &ls, &extent_server_cache::remove);
+  server.reg(extent_protocol::create, &ls, &extent_server_cache::create);
+#else
+  extent_server ls;
   server.reg(extent_protocol::get, &ls, &extent_server::get);
   server.reg(extent_protocol::getattr, &ls, &extent_server::getattr);
   server.reg(extent_protocol::put, &ls, &extent_server::put);
   server.reg(extent_protocol::remove, &ls, &extent_server::remove);
   server.reg(extent_protocol::create, &ls, &extent_server::create);
+#endif
 
   while(1)
     sleep(1000);

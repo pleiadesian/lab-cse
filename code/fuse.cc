@@ -17,6 +17,9 @@
 #include <arpa/inet.h>
 #include "lang/verify.h"
 #include "yfs_client.h"
+#include "tprintf.h"
+
+#define DEBUG
 
 int myid;
 yfs_client *yfs;
@@ -175,7 +178,13 @@ fuseserver_read(fuse_req_t req, fuse_ino_t ino, size_t size,
     std::string buf;
     // Change the above "#if 0" to "#if 1", and your code goes here
     int r;
+#ifdef DEBUG
+    tprintf("fuse: start read\n");
+#endif
     if ((r = yfs->read(ino, size, off, buf)) == yfs_client::OK) {
+#ifdef DEBUG
+        tprintf("fuse: get size=%lu data=\n%s\n", buf.size() ,buf.data());
+#endif
         fuse_reply_buf(req, buf.data(), buf.size());    
     } else {
         fuse_reply_err(req, ENOENT);

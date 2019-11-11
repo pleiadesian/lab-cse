@@ -1,6 +1,6 @@
 // yfs client.  implements FS operations using extent and lock server
 #include "yfs_client.h"
-#include "extent_client.h"
+// #include "extent_client.h"
 #include <sstream>
 #include <iostream>
 #include <stdio.h>
@@ -8,14 +8,27 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include "tprintf.h"
+
+// #include "extent_client_cache.h"
+
+#define DEBUG
+
 
 yfs_client::yfs_client(std::string extent_dst, std::string lock_dst)
 {
-  ec = new extent_client(extent_dst);
+//   ec = new extent_client(extent_dst);
+  ec = new extent_client_cache(extent_dst);
 //   lc = new lock_client(lock_dst);
   lc = new lock_client_cache(lock_dst);
+#ifdef DEBUG
+  printf("yfs client: start put 1, ""\n");
+#endif
   if (ec->put(1, "") != extent_protocol::OK)
       printf("error init root dir\n"); // XYB: init root dir
+#ifdef DEBUG
+  printf("yfs client: end put 1, ""\n");
+#endif
 }
 
 
@@ -40,7 +53,9 @@ bool
 yfs_client::isfile(inum inum)
 {
     extent_protocol::attr a;
-
+#ifdef DEBUG
+    tprintf("yfs_client: start isfile %llu\n", inum);
+#endif
     if (ec->getattr(inum, a) != extent_protocol::OK) {
         printf("error getting attr\n");
         return false;
@@ -162,7 +177,9 @@ yfs_client::setattr(inum ino, size_t size)
      * note: get the content of inode ino, and modify its content
      * according to the size (<, =, or >) content length.
      */
-
+#ifdef DEBUG
+    tprintf("yfs_client: start setattr %llu\n", ino);
+#endif
     lc->acquire(ino);
 
     std::string buf;
@@ -193,6 +210,9 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
      * note: lookup is what you need to check if file exist;
      * after create file or dir, you must remember to modify the parent infomation.
      */
+#ifdef DEBUG
+    tprintf("yfs_client: start CREATE %s\n", name);
+#endif
 
     lc->acquire(parent);
 
@@ -228,12 +248,18 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
         lc->release(parent);
         return EXIST;
     }
+#ifdef DEBUG
+    tprintf("yfs_client: CREATE - check %s not exist in dir\n", name);
+#endif
 
     // create a new file
     if (ec->create(extent_protocol::T_FILE, ino_out) != extent_protocol::OK) {
         lc->release(parent);
         return IOERR;
     }
+#ifdef DEBUG
+    tprintf("yfs_client: CREATE - finish create inode for %s\n", name);
+#endif
 
     // generate fix size direct entry
     std::string sde;
@@ -251,6 +277,9 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
         lc->release(parent);
         return IOERR;
     }
+#ifdef DEBUG
+    tprintf("yfs_client: finish CREATE %s\n", name);
+#endif
 
     lc->release(parent);
 
@@ -267,7 +296,9 @@ yfs_client::mkdir(inum parent, const char *name, mode_t mode, inum &ino_out)
      * note: lookup is what you need to check if directory exist;
      * after create file or dir, you must remember to modify the parent infomation.
      */
-
+#ifdef DEBUG
+    tprintf("yfs_client: start mkdir %s\n", name);
+#endif
     lc->acquire(parent);
 
     // check if name exists
@@ -329,14 +360,22 @@ yfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
 //    r = _lookup(parent, name, found, ino_out);
 //
 //    lc->release(parent);
-
+#ifdef DEBUG
+    tprintf("yfs_client: lookup %s\n", name);
+#endif
     std::list<dirent> de_list;
     _readdir(parent, de_list);
 
     found = false;
     for (std::list<dirent>::iterator it = de_list.begin() ; it != de_list.end() ; it++) {
         std::string sname;
+#ifdef DEBUG
+            tprintf("yfs_client: lookup at %s\n", it->name.c_str());
+#endif
         if (it->name == sname.assign(name, strlen(name))) {
+#ifdef DEBUG
+            tprintf("yfs_client: lookup found %s\n", name);
+#endif
             found = true;
             ino_out = it->inum;
             break;
@@ -375,7 +414,9 @@ yfs_client::readdir(inum dir, std::list<dirent> &list)
      * note: you should parse the dirctory content using your defined format,
      * and push the dirents to the list.
      */
-
+#ifdef DEBUG
+    tprintf("yfs_client: start readdir %llu\n", dir);
+#endif
     lc->acquire(dir);
 
     r = _readdir(dir, list);
@@ -428,7 +469,9 @@ yfs_client::read(inum ino, size_t size, off_t off, std::string &data)
      * your code goes here.
      * note: read using ec->get().
      */
-
+#ifdef DEBUG
+    tprintf("yfs_client: start read %llu\n", ino);
+#endif
     lc->acquire(ino);
 
     std::string buf;
@@ -463,7 +506,9 @@ yfs_client::write(inum ino, size_t size, off_t off, const char *data,
      */
 
     lc->acquire(ino);
-
+#ifdef DEBUG
+    tprintf("yfs_client: start write %llu\n", ino);
+#endif
     std::string buf;
     if (ec->get(ino, buf) != extent_protocol::OK) {
         lc->release(ino);
@@ -503,7 +548,9 @@ int yfs_client::unlink(inum parent,const char *name)
      * note: you should remove the file using ec->remove,
      * and update the parent directory content.
      */
-
+#ifdef DEBUG
+    tprintf("yfs_client: start unlink %s\n", name);
+#endif
     lc->acquire(parent);
 
     // check if file exists
@@ -559,7 +606,9 @@ int yfs_client::unlink(inum parent,const char *name)
 
 int yfs_client::symlink(inum parent, const char *name, const char *link, inum &ino_out) {
     int r = OK;
-
+#ifdef DEBUG
+    tprintf("yfs_client: start symlink %s\n", name);
+#endif
     lc->acquire(parent);
 
     if (name == NULL || link == NULL) {
@@ -615,7 +664,9 @@ int yfs_client::symlink(inum parent, const char *name, const char *link, inum &i
 
 int yfs_client::readlink(inum ino, std::string &data) {
     int r = OK;
-
+#ifdef DEBUG
+    tprintf("yfs_client: start readlink %llu\n", ino);
+#endif
     lc->acquire(ino);
 
     if (ec->get(ino, data) != extent_protocol::OK) {

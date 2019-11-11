@@ -48,6 +48,7 @@ extent_client::getattr(extent_protocol::extentid_t eid,
 extent_protocol::status
 extent_client::put(extent_protocol::extentid_t eid, std::string buf)
 {
+printf("put error function\n");
   extent_protocol::status ret = extent_protocol::OK;
   // Your lab2 part1 code goes here
   int r;

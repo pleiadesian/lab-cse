@@ -1,4 +1,4 @@
-LAB=3
+LAB=4
 SOL=0
 RPC=./rpc
 LAB1GE=$(shell expr $(LAB) \>\= 1)
@@ -45,6 +45,7 @@ lab:  lab$(LAB)
 lab1: lab1_tester yfs_client 
 lab2: lock_server lock_tester lock_demo yfs_client extent_server test-lab2-part1-g test-lab2-part2-a test-lab2-part2-b
 lab3: yfs_client extent_server lock_server lock_tester test-lab-3-a    test-lab-3-b
+lab4: lab2 lab3 
 lab5: yfs_client extent_server lock_server lock_tester test-lab2-part2-b\
 	 test-lab2-part2-c
 lab6: yfs_client extent_server lock_server test-lab2-part2-b test-lab2-part2-c
@@ -59,6 +60,7 @@ hfiles2=yfs_client.h extent_client.h extent_protocol.h extent_server.h
 hfiles3=lock_client_cache.h lock_server_cache.h handle.h tprintf.h
 hfiles4=log.h rsm.h rsm_protocol.h config.h paxos.h paxos_protocol.h rsm_state_transfer.h rsmtest_client.h tprintf.h
 hfiles5=rsm_state_transfer.h rsm_client.h
+hfiles6=extent_client_cache.h extent_server_cache.h
 rsm_files = rsm.cc paxos.cc config.cc log.cc handle.cc
 
 rpc/rpctest=rpc/rpctest.cc
@@ -101,9 +103,15 @@ endif
 ifeq ($(LAB3GE),1)
   yfs_client += lock_client_cache.cc
 endif
+ifeq ($(LAB4GE),1)
+  yfs_client += extent_client_cache.cc
+endif
 yfs_client : $(patsubst %.cc,%.o,$(yfs_client)) rpc/$(RPCLIB)
 
 extent_server=extent_server.cc extent_smain.cc inode_manager.cc
+ifeq ($(LAB4GE),1)
+  extent_server+=extent_server_cache.cc handle.cc
+endif
 extent_server : $(patsubst %.cc,%.o,$(extent_server)) rpc/$(RPCLIB)
 
 test-lab2-part1-b=test-lab2-part1-b.c
@@ -132,7 +140,7 @@ clean_files=rpc/rpctest rpc/*.o rpc/*.d *.o *.d yfs_client extent_server lock_se
 clean: 
 	rm $(clean_files) -rf 
 
-handin_ignore=$(clean_files) core* *log
+handin_ignore=$(clean_files) core* *log .git .DS_Store .vscode .idea
 handin_file=lab$(LAB).tgz
 labdir=$(shell basename $(PWD))
 handin: 
