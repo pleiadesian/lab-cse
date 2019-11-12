@@ -13,7 +13,8 @@
 #include "tprintf.h"
 
 #define LOCK_TEST
-#define DEBUG
+// #define DEBUG
+// #define S_DEBUG
 
 extent_server_cache::extent_server_cache() 
 {
@@ -37,6 +38,10 @@ int extent_server_cache::create(uint32_t type, std::string cid, extent_protocol:
   tprintf("extent_server: create inode\n");
 #endif
   id = im->alloc_inode(type);
+// #ifdef DEBUG
+//   tprintf("extent_server: create get inode %llu\n", id);
+// #endif
+//   VERIFY (inode_list[id] == NULL);
 
   inode_entry *ie = new inode_entry();
   // ie->stat = SHARED;
@@ -61,6 +66,9 @@ int extent_server_cache::put(extent_protocol::extentid_t id, std::string cid, st
 #endif
 #ifdef DEBUG
   tprintf("extent_server: %s put %llu start\n", cid.c_str(), id);
+#endif
+#ifdef S_DEBUG
+tprintf("extent_server: %s put %llu start\n", cid.c_str(), id);
 #endif
   id &= 0x7fffffff;
 
@@ -114,29 +122,45 @@ int extent_server_cache::put(extent_protocol::extentid_t id, std::string cid, st
 #ifdef DEBUG
     tprintf("extent_server: %s put %llu --> exclusive\n", cid.c_str(), id);
 #endif
+#ifdef S_DEBUG
+    tprintf("extent_server: %s put %llu --> exclusive\n", cid.c_str(), id);
+#endif
 #ifdef LOCK_TEST
     pthread_mutex_unlock(&lock);
 #endif
     return extent_protocol::OK;
   } else {
-    // exclusive writer write back data, wake up a reader waiting in the queue
-    VERIFY (ie->writer == cid);
+    
     // write data onto disk
     const char * cbuf = buf.c_str();
     int size = buf.size();
     im->write_file(id, cbuf, size);
 
-    // get newest attr
-    // extent_protocol::attr attr;
-    // memset(&attr, 0, sizeof(attr));
-    // im->getattr(id, attr);
-
-    ie->stat = SHARED;
-    VERIFY (ie->reader_queue.empty());
+  
+    // VERIFY (ie->writer == cid);
+    if (ie->writer == cid) {
+      // exclusive writer write back data, wake up a reader waiting in the queue
+      ie->stat = SHARED;
+      VERIFY (ie->reader_queue.empty());
+    } else {
+      // a new writer do a blind write, invalid previous writer
+#ifdef LOCK_TEST
+      pthread_mutex_unlock(&lock);
+#endif
+      handle(ie->writer).safebind()->call(rextent_protocol::invalid, id, r);
+#ifdef LOCK_TEST
+      pthread_mutex_lock(&lock);
+#endif
+      ie->writer = cid;
+      VERIFY (ie->reader_queue.empty());
+    }
     // VERIFY (ie->reader_queue.size() == 1);
     // std::string reader_id = ie->reader_queue.front();
 #ifdef DEBUG
     tprintf("extent_server: %s put %llu --> wait other to retry\n", cid.c_str(), id);
+#endif
+#ifdef S_DEBUG
+    tprintf("extent_server: %s put %llu --> write it back to other\n", cid.c_str(), id);
 #endif
 #ifdef LOCK_TEST
     pthread_mutex_unlock(&lock);
@@ -152,6 +176,9 @@ int extent_server_cache::get(extent_protocol::extentid_t id, std::string cid , s
   pthread_mutex_lock(&lock);
 #endif
 #ifdef DEBUG
+  tprintf("extent_server: %s get %lld start\n", cid.c_str(), id);
+#endif
+#ifdef S_DEBUG
   tprintf("extent_server: %s get %lld start\n", cid.c_str(), id);
 #endif
   id &= 0x7fffffff;
@@ -192,6 +219,9 @@ int extent_server_cache::get(extent_protocol::extentid_t id, std::string cid , s
 #ifdef DEBUG
   tprintf("extent_server: %s get %lld end\n", cid.c_str(), id);
 #endif
+#ifdef S_DEBUG
+  tprintf("extent_server: %s get %lld end\n", cid.c_str(), id);
+#endif
 #ifdef LOCK_TEST
   pthread_mutex_unlock(&lock);
 #endif
@@ -206,6 +236,9 @@ int extent_server_cache::getattr(extent_protocol::extentid_t id, std::string cid
 #ifdef DEBUG
   tprintf("extent_server: getattr %llu start\n", id);
 #endif
+#ifdef S_DEBUG
+  tprintf("extent_server: %s getattr %llu start\n", cid.c_str(), id);
+#endif
   id &= 0x7fffffff;
 
   inode_entry *ie = inode_list[id];
@@ -214,7 +247,7 @@ int extent_server_cache::getattr(extent_protocol::extentid_t id, std::string cid
   if (ie->stat == EXCLUSIVE && ie->writer != cid) {
     // revoke dirty data in writer's cache and let client wait
     int r;
-    VERIFY (ie->reader_queue.empty());
+    // VERIFY (ie->reader_queue.empty());
     // ie->reader_queue.push_back(cid);
 #ifdef DEBUG
     tprintf("extent_server: %s getattr %lld --> revoke from %s\n", cid.c_str(), id, ie->writer.c_str());
@@ -233,7 +266,9 @@ int extent_server_cache::getattr(extent_protocol::extentid_t id, std::string cid
   memset(&attr, 0, sizeof(attr));
   im->getattr(id, attr);
   a = attr;
-
+#ifdef S_DEBUG
+  tprintf("extent_server: %s getattr %llu end\n", cid.c_str(),id);
+#endif
 #ifdef DEBUG
   tprintf("extent_server: getattr %llu end\n", id);
 #endif

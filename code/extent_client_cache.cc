@@ -13,7 +13,7 @@
 
 
 #define LOCK_TEST
-#define DEBUG
+// #define DEBUG
 
 
 int extent_client_cache::last_port = ~0; // diff from last_port of lock client cache
@@ -71,6 +71,14 @@ extent_client_cache::create(uint32_t type, extent_protocol::extentid_t &id)
     ic->atime = (unsigned int)time(NULL);
     ic->ctime = (unsigned int)time(NULL);
     ic->mtime = (unsigned int)time(NULL);
+    extent_protocol::attr attr;
+    attr.atime = ic->atime;
+    attr.ctime = ic->ctime;
+    attr.mtime = ic->mtime;
+    attr.size = 0;
+    attr.type = type;
+    ic->attr = attr;
+    ic->attr_cached = 1;
     inode_list[id] = ic;
     VERIFY (ret == extent_protocol::OK);
 #ifdef DEBUG
@@ -87,6 +95,14 @@ extent_client_cache::create(uint32_t type, extent_protocol::extentid_t &id)
     ic->atime = (unsigned int)time(NULL);
     ic->ctime = (unsigned int)time(NULL);
     ic->mtime = (unsigned int)time(NULL);
+    extent_protocol::attr attr;
+    attr.atime = ic->atime;
+    attr.ctime = ic->ctime;
+    attr.mtime = ic->mtime;
+    attr.size = 0;
+    attr.type = type;
+    ic->attr = attr;
+    ic->attr_cached = 1;
   }
 #ifdef DEBUG
   tprintf("extent client: %s CREATE end, inode=%llu\n", this->id.c_str(), id);
@@ -391,13 +407,25 @@ extent_client_cache::getattr(extent_protocol::extentid_t eid,
       tprintf("extent client: %s getattr %llu data and attr cache miss, start request server\n", id.c_str(), eid);
 #endif
       // std::string writer_id;
+      std::string buf;
 #ifdef LOCK_TEST
       pthread_mutex_unlock(&lock);
 #endif
       ret = cl->call(extent_protocol::getattr, eid, id, attr);
+
+      ret = cl->call(extent_protocol::get, eid, id, buf);  // prefetch the data to reduce getattr rpc
 #ifdef LOCK_TEST
       pthread_mutex_lock(&lock);
 #endif
+
+      ic->stat = SHARED;
+      ic->valid = 1;
+      ic->buf = buf;
+      ic->atime = (unsigned int)time(NULL);
+#ifdef DEBUG
+      tprintf("extent client: %s get %llu - miss -> valid\n", id.c_str(), eid);
+#endif
+      VERIFY (ret == extent_protocol::OK);
 
 //       if (ret == extent_protocol::RETRY) {
 // #ifdef DEBUG
@@ -431,7 +459,7 @@ extent_client_cache::getattr(extent_protocol::extentid_t eid,
       ic->attr_cached = 1;
       ic->attr = attr;
 #ifdef DEBUG
-      tprintf("extent client: %s getattr %llu data and attr cache miss, update local attr cache\n", id.c_str(), eid);
+      tprintf("extent client: %s getattr %llu data and attr cache miss, update local attr cache and data cache\n", id.c_str(), eid);
 #endif
   }
 
@@ -640,30 +668,3 @@ extent_client_cache::revoke_handler(extent_protocol::extentid_t eid, int &r)
 
   return rextent_protocol::OK;
 }
-
-// rextent_protocol::status
-// extent_client_cache::retry_handler(extent_protocol::extentid_t eid, std::string buf, extent_protocol::attr attr, int &r)
-// {
-// #ifdef LOCK_TEST
-//   pthread_mutex_lock(&lock);
-// #endif
-// #ifdef DEBUG
-//   tprintf("extent client: retry start\n");
-// #endif
-//   int ret = rextent_protocol::OK;
-//   inode_cache *ic = inode_list[eid];
-//   ic->retry = 1;
-//   ic->buf = buf;
-//   ic->valid = 1;
-//   ic->attr = attr;
-//   ic->attr_cached = 1;
-//   ic->stat = SHARED;
-// #ifdef DEBUG
-//   tprintf("extent client: retry end, should wake up the reader\n");
-// #endif
-// #ifdef LOCK_TEST
-//   pthread_mutex_unlock(&lock);
-// #endif
-//   pthread_cond_signal(&ic->retry_reader);
-//   return ret;
-// }

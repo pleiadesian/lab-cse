@@ -49,6 +49,7 @@ class yfs_client {
   static std::string filename(inum);
   static inum n2i(std::string);
 
+  bool _isdir(inum);
   int _readdir(inum, std::list<dirent> &);
   int _lookup(inum, const char *, bool &, inum &);
 

@@ -12,7 +12,7 @@
 
 // #include "extent_client_cache.h"
 
-#define DEBUG
+// #define DEBUG
 
 
 yfs_client::yfs_client(std::string extent_dst, std::string lock_dst)
@@ -52,20 +52,26 @@ yfs_client::filename(inum inum)
 bool
 yfs_client::isfile(inum inum)
 {
+    lc->acquire(inum);
+
     extent_protocol::attr a;
 #ifdef DEBUG
     tprintf("yfs_client: start isfile %llu\n", inum);
 #endif
     if (ec->getattr(inum, a) != extent_protocol::OK) {
         printf("error getting attr\n");
+        lc->release(inum);
         return false;
     }
 
     if (a.type == extent_protocol::T_FILE) {
         printf("isfile: %lld is a file\n", inum);
+        lc->release(inum);
         return true;
     } 
     printf("isfile: %lld is not a file\n", inum);
+
+    lc->release(inum);
     return false;
 }
 /** Your code here for Lab...
@@ -73,15 +79,14 @@ yfs_client::isfile(inum inum)
  * readlink, issymlink here to implement symbolic link.
  * 
  * */
-
 bool
-yfs_client::isdir(inum inum)
+yfs_client::_isdir(inum inum)
 {
     extent_protocol::attr a;
 
     if (ec->getattr(inum, a) != extent_protocol::OK) {
-    printf("error getting attr\n");
-    return false;
+        printf("error getting attr\n");
+        return false;
     }
 
     if (a.type == extent_protocol::T_DIR) {
@@ -93,20 +98,50 @@ yfs_client::isdir(inum inum)
 }
 
 bool
+yfs_client::isdir(inum inum)
+{
+    lc->acquire(inum);
+
+    // extent_protocol::attr a;
+
+    // if (ec->getattr(inum, a) != extent_protocol::OK) {
+    //     printf("error getting attr\n");
+    //     lc->release(inum);
+    //     return false;
+    // }
+
+    // if (a.type == extent_protocol::T_DIR) {
+    //     printf("isdir: %lld is a dir\n", inum);
+    //     lc->release(inum);
+    //     return true;
+    // }
+    // printf("isdir: %lld is not a dir\n", inum);
+    bool is_dir = _isdir(inum);
+    lc->release(inum);
+    // return false;
+    return is_dir;
+}
+
+bool
 yfs_client::issymlink(inum inum)
 {
+    lc->acquire(inum);
+
     extent_protocol::attr a;
 
     if (ec->getattr(inum, a) != extent_protocol::OK) {
         printf("error getting attr\n");
+        lc->release(inum);
         return false;
     }
 
     if (a.type == extent_protocol::T_SYMLINK) {
         printf("issymlink: %lld is a symlink\n", inum);
+        lc->release(inum);
         return true;
     }
     printf("issymlink: %lld is not a symlink\n", inum);
+    lc->release(inum);
     return false;
 }
 
@@ -210,14 +245,15 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
      * note: lookup is what you need to check if file exist;
      * after create file or dir, you must remember to modify the parent infomation.
      */
-#ifdef DEBUG
-    tprintf("yfs_client: start CREATE %s\n", name);
-#endif
+// #ifdef DEBUG
+//     tprintf("yfs_client: start CREATE %s\n", name);
+// #endif
 
     lc->acquire(parent);
+tprintf("get CREATE parent lock\n");
 
     // check parent
-    if (!isdir(parent)) {
+    if (!_isdir(parent)) {
         lc->release(parent);
         return IOERR;
     }
@@ -243,23 +279,21 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
     // check if name exists
     bool found = false;
     inum temp_inum;
-    lookup(parent, name, found, temp_inum);
+    int ret = _lookup(parent, name, found, temp_inum);
+    if (ret == IOERR) {
+        lc->release(parent);
+        return IOERR;
+    }
     if (found) {
         lc->release(parent);
         return EXIST;
     }
-#ifdef DEBUG
-    tprintf("yfs_client: CREATE - check %s not exist in dir\n", name);
-#endif
 
     // create a new file
     if (ec->create(extent_protocol::T_FILE, ino_out) != extent_protocol::OK) {
         lc->release(parent);
         return IOERR;
     }
-#ifdef DEBUG
-    tprintf("yfs_client: CREATE - finish create inode for %s\n", name);
-#endif
 
     // generate fix size direct entry
     std::string sde;
@@ -272,6 +306,9 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
     sde.assign((char *)&fde, sizeof(fix_dir_entry));
     buf += sde;
 
+#ifdef DEBUG
+    tprintf("yfs_client:  CREATE start write to parent %llu\n", parent);
+#endif
     // write entry to parent dir
     if (ec->put(parent, buf) != extent_protocol::OK) {
         lc->release(parent);
@@ -304,7 +341,11 @@ yfs_client::mkdir(inum parent, const char *name, mode_t mode, inum &ino_out)
     // check if name exists
     bool exist = false;
     inum inum_out;
-    _lookup(parent, name, exist, inum_out);
+    int ret = _lookup(parent, name, exist, inum_out);
+    if (ret == IOERR) {
+        lc->release(parent);
+        return IOERR;
+    }
     if (exist) {
         lc->release(parent);
         return EXIST;
@@ -354,33 +395,33 @@ yfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
      * note: lookup file from parent dir according to name;
      * you should design the format of directory content.
      */
-//
-//    lc->acquire(parent);
-//
-//    r = _lookup(parent, name, found, ino_out);
-//
-//    lc->release(parent);
-#ifdef DEBUG
-    tprintf("yfs_client: lookup %s\n", name);
-#endif
-    std::list<dirent> de_list;
-    _readdir(parent, de_list);
+printf("start lookup\n");
+   lc->acquire(parent);
+printf("start lookup get parent lock\n");
+   r = _lookup(parent, name, found, ino_out);
 
-    found = false;
-    for (std::list<dirent>::iterator it = de_list.begin() ; it != de_list.end() ; it++) {
-        std::string sname;
-#ifdef DEBUG
-            tprintf("yfs_client: lookup at %s\n", it->name.c_str());
-#endif
-        if (it->name == sname.assign(name, strlen(name))) {
-#ifdef DEBUG
-            tprintf("yfs_client: lookup found %s\n", name);
-#endif
-            found = true;
-            ino_out = it->inum;
-            break;
-        }
-    }
+   lc->release(parent);
+// #ifdef DEBUG
+//     tprintf("yfs_client: lookup %s\n", name);
+// #endif
+//     std::list<dirent> de_list;
+//     _readdir(parent, de_list);
+
+//     found = false;
+//     for (std::list<dirent>::iterator it = de_list.begin() ; it != de_list.end() ; it++) {
+//         std::string sname;
+// #ifdef DEBUG
+//             tprintf("yfs_client: lookup at %s\n", it->name.c_str());
+// #endif
+//         if (it->name == sname.assign(name, strlen(name))) {
+// #ifdef DEBUG
+//             tprintf("yfs_client: lookup found %s\n", name);
+// #endif
+//             found = true;
+//             ino_out = it->inum;
+//             break;
+//         }
+//     }
 
     return r;
 }
@@ -389,7 +430,10 @@ int
 yfs_client::_lookup(inum parent, const char *name, bool &found, inum &ino_out)
 {
     std::list<dirent> de_list;
-    _readdir(parent, de_list);
+    int ret = _readdir(parent, de_list);
+    if (ret == IOERR) {
+        return IOERR;
+    }
 
     found = false;
     for (std::list<dirent>::iterator it = de_list.begin() ; it != de_list.end() ; it++) {
@@ -431,12 +475,10 @@ yfs_client::_readdir(inum dir, std::list<dirent> &list)
     std::string buf, snamesize, sname, sinum;
     extent_protocol::attr attr;
     if (ec->get(dir, buf) != extent_protocol::OK || ec->getattr(dir, attr) != extent_protocol::OK) {
-        lc->release(dir);
         return IOERR;
     }
 
     if (attr.type != extent_protocol::T_DIR) {
-        lc->release(dir);
         return IOERR;
     }
 
@@ -556,7 +598,11 @@ int yfs_client::unlink(inum parent,const char *name)
     // check if file exists
     bool exist = false;
     inum inum_out;
-    _lookup(parent, name, exist, inum_out);
+    int ret = _lookup(parent, name, exist, inum_out);
+    if (ret == IOERR) {
+        lc->release(parent);
+        return IOERR;
+    }
     if (!exist) {
         lc->release(parent);
         return NOENT;
@@ -572,7 +618,12 @@ int yfs_client::unlink(inum parent,const char *name)
 
 
     std::list<dirent> de_list;
-    _readdir(parent, de_list);
+    ret = _readdir(parent, de_list);
+    if (ret == IOERR) {
+        lc->release(inum_out);
+        lc->release(parent);
+        return IOERR;
+    }
     std::string buf;
     for (std::list<dirent>::iterator it = de_list.begin() ; it != de_list.end() ; it++) {
         // pass the removed entry
@@ -618,7 +669,11 @@ int yfs_client::symlink(inum parent, const char *name, const char *link, inum &i
 
     bool exist = false;
     inum inum_out;
-    _lookup(parent, name, exist, inum_out);
+    int ret = _lookup(parent, name, exist, inum_out);
+    if (ret == IOERR) {
+        lc->release(parent);
+        return IOERR;
+    }
     if (exist) {
         lc->release(parent);
         return EXIST;
@@ -656,7 +711,10 @@ int yfs_client::symlink(inum parent, const char *name, const char *link, inum &i
 
     // write link to symlink file
     std::string slink = std::string(link);
+
+    lc->acquire(ino_out);
     ec->put(ino_out, slink);
+    lc->release(ino_out);
 
     lc->release(parent);
     return r;
