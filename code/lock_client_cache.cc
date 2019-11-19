@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include "tprintf.h"
 
-// #define DEBUG
 
 int lock_client_cache::last_port = 0;
 
@@ -47,7 +46,6 @@ lock_client_cache::acquire(lock_protocol::lockid_t lid)
     lock_list[lid] = new_lock;
   }
 
-  // tprintf("%s start acquire, status %d\n", id.c_str(), lock_list[lid]->stat);
   lock_cache *lc = lock_list[lid];
 
   if (lc->stat == FREE) {
@@ -78,9 +76,6 @@ lock_client_cache::acquire(lock_protocol::lockid_t lid)
       lc->thread_queue.pop_front();
       if (lc->stat == LOCKED) {
           // wake up by local thread, do not need acquiring
-#ifdef DEBUG
-          tprintf("lock client: acquire %llu\n", lid);
-#endif
           pthread_mutex_unlock(&lock);
           return lock_protocol::OK;
       }
@@ -108,9 +103,6 @@ lock_client_cache::acquire(lock_protocol::lockid_t lid)
       }
     }
   }
-#ifdef DEBUG
-  tprintf("lock client: acquire %llu, stat = %d\n", lid, ret);
-#endif
   pthread_mutex_unlock(&lock);
 
   return ret;
@@ -148,9 +140,6 @@ lock_client_cache::release(lock_protocol::lockid_t lid)
   }
 
   pthread_mutex_unlock(&lock);
-#ifdef DEBUG
-  tprintf("lock client: release %llu\n", lid);
-#endif
   return lock_protocol::OK;
 }
 

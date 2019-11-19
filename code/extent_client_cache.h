@@ -63,7 +63,7 @@ class extent_client_cache : public extent_client {
   rextent_protocol::status invalid_handler(extent_protocol::extentid_t,
                                           int &);
   rextent_protocol::status revoke_handler(extent_protocol::extentid_t,
-                                          int &);
+                                          std::string &);
 };
 
 #endif 

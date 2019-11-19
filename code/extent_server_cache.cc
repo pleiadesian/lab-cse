@@ -12,9 +12,6 @@
 #include "lang/verify.h"
 #include "tprintf.h"
 
-#define LOCK_TEST
-// #define DEBUG
-// #define S_DEBUG
 
 extent_server_cache::extent_server_cache() 
 {
@@ -30,46 +27,23 @@ extent_server_cache::extent_server_cache()
 int extent_server_cache::create(uint32_t type, std::string cid, extent_protocol::extentid_t &id)
 {
   // alloc a new inode and return inum
-#ifdef LOCK_TEST
   pthread_mutex_lock(&lock);
-#endif
-
-#ifdef DEBUG
-  tprintf("extent_server: create inode\n");
-#endif
   id = im->alloc_inode(type);
-// #ifdef DEBUG
-//   tprintf("extent_server: create get inode %llu\n", id);
-// #endif
-//   VERIFY (inode_list[id] == NULL);
 
+  // creater client hold the cache as an exclusive writer
   inode_entry *ie = new inode_entry();
-  // ie->stat = SHARED;
   ie->stat = EXCLUSIVE;
   ie->writer = cid;
   inode_list[id] = ie;
 
-
-#ifdef DEBUG
-  tprintf("extent_server: end create inode %llu\n", id);
-#endif
-#ifdef LOCK_TEST
   pthread_mutex_unlock(&lock);
-#endif
   return extent_protocol::OK;
 }
 
 int extent_server_cache::put(extent_protocol::extentid_t id, std::string cid, std::string buf, int &)
 {
-#ifdef LOCK_TEST
   pthread_mutex_lock(&lock);
-#endif
-#ifdef DEBUG
-  tprintf("extent_server: %s put %llu start\n", cid.c_str(), id);
-#endif
-#ifdef S_DEBUG
-tprintf("extent_server: %s put %llu start\n", cid.c_str(), id);
-#endif
+
   id &= 0x7fffffff;
 
   // handle INIT when start a new yfs_client
@@ -79,12 +53,7 @@ tprintf("extent_server: %s put %llu start\n", cid.c_str(), id);
     int size = buf.size();
     im->write_file(id, cbuf, size);
 
-#ifdef DEBUG
-  tprintf("extent_server: %s put init to inode 1\n", cid.c_str());
-#endif
-#ifdef LOCK_TEST
     pthread_mutex_unlock(&lock);
-#endif
     return extent_protocol::OK;
   }
 
@@ -99,18 +68,10 @@ tprintf("extent_server: %s put %llu start\n", cid.c_str(), id);
       std::string rid = ie->reader_queue.front();
       // send invalid to reader except the requesting exclusive writer
       if (rid != cid) {
-#ifdef DEBUG
-        tprintf("extent_server: %s put %llu --> invalid %s\n", cid.c_str(), id, rid.c_str());
-#endif
-#ifdef LOCK_TEST
         pthread_mutex_unlock(&lock);
-#endif
         handle(rid).safebind()->call(rextent_protocol::invalid, id, r);
-#ifdef LOCK_TEST
         pthread_mutex_lock(&lock);
-#endif
       }
-
       ie->reader_queue.pop_front();
     }
 
@@ -119,89 +80,47 @@ tprintf("extent_server: %s put %llu start\n", cid.c_str(), id);
     int size = buf.size();
     im->write_file(id, cbuf, size);
 
-#ifdef DEBUG
-    tprintf("extent_server: %s put %llu --> exclusive\n", cid.c_str(), id);
-#endif
-#ifdef S_DEBUG
-    tprintf("extent_server: %s put %llu --> exclusive\n", cid.c_str(), id);
-#endif
-#ifdef LOCK_TEST
     pthread_mutex_unlock(&lock);
-#endif
     return extent_protocol::OK;
   } else {
-    
     // write data onto disk
     const char * cbuf = buf.c_str();
     int size = buf.size();
     im->write_file(id, cbuf, size);
 
-  
-    // VERIFY (ie->writer == cid);
-    if (ie->writer == cid) {
-      // exclusive writer write back data, wake up a reader waiting in the queue
-      ie->stat = SHARED;
-      VERIFY (ie->reader_queue.empty());
-    } else {
-      // a new writer do a blind write, invalid previous writer
-#ifdef LOCK_TEST
-      pthread_mutex_unlock(&lock);
-#endif
-      handle(ie->writer).safebind()->call(rextent_protocol::invalid, id, r);
-#ifdef LOCK_TEST
-      pthread_mutex_lock(&lock);
-#endif
-      ie->writer = cid;
-      VERIFY (ie->reader_queue.empty());
-    }
-    // VERIFY (ie->reader_queue.size() == 1);
-    // std::string reader_id = ie->reader_queue.front();
-#ifdef DEBUG
-    tprintf("extent_server: %s put %llu --> wait other to retry\n", cid.c_str(), id);
-#endif
-#ifdef S_DEBUG
-    tprintf("extent_server: %s put %llu --> write it back to other\n", cid.c_str(), id);
-#endif
-#ifdef LOCK_TEST
+    VERIFY (ie->writer != cid);
     pthread_mutex_unlock(&lock);
-#endif
-    // handle(reader_id).safebind()->call(rextent_protocol::retry, id, buf, attr, r);
+    handle(ie->writer).safebind()->call(rextent_protocol::invalid, id, r);
+    pthread_mutex_lock(&lock);
+    ie->writer = cid;
+
+    pthread_mutex_unlock(&lock);
     return extent_protocol::OK;
   }
 }
 
 int extent_server_cache::get(extent_protocol::extentid_t id, std::string cid , std::string &buf)
 {
-#ifdef LOCK_TEST
   pthread_mutex_lock(&lock);
-#endif
-#ifdef DEBUG
-  tprintf("extent_server: %s get %lld start\n", cid.c_str(), id);
-#endif
-#ifdef S_DEBUG
-  tprintf("extent_server: %s get %lld start\n", cid.c_str(), id);
-#endif
+
   id &= 0x7fffffff;
 
   inode_entry *ie = inode_list[id];
   VERIFY (ie != NULL);
 
   if (ie->stat == EXCLUSIVE) {
-    // revoke dirty data in writer's cache and let client wait
-    int r;
-    VERIFY (ie->reader_queue.empty());
-    // ie->reader_queue.push_back(cid);
-#ifdef DEBUG
-    tprintf("extent_server: %s get %lld --> start revoke from %s\n", cid.c_str(), id, ie->writer.c_str());
-#endif
-    VERIFY (ie->writer != cid);
-#ifdef LOCK_TEST
+    // revoke dirty data in writer's cache
+    std::string revoke_buf;
     pthread_mutex_unlock(&lock);
-#endif
-    handle(ie->writer).safebind()->call(rextent_protocol::revoke, id, r);
-#ifdef LOCK_TEST
+    handle(ie->writer).safebind()->call(rextent_protocol::revoke, id, revoke_buf);
     pthread_mutex_lock(&lock);
-#endif
+
+    // write data onto disk
+    const char * cbuf = revoke_buf.c_str();
+    int size = revoke_buf.size();
+    im->write_file(id, cbuf, size);
+
+    ie->stat = SHARED;
   }
 
   // read data from disk
@@ -216,49 +135,32 @@ int extent_server_cache::get(extent_protocol::extentid_t id, std::string cid , s
   }
 
   ie->reader_queue.push_back(cid);
-#ifdef DEBUG
-  tprintf("extent_server: %s get %lld end\n", cid.c_str(), id);
-#endif
-#ifdef S_DEBUG
-  tprintf("extent_server: %s get %lld end\n", cid.c_str(), id);
-#endif
-#ifdef LOCK_TEST
   pthread_mutex_unlock(&lock);
-#endif
   return extent_protocol::OK;
 }
 
 int extent_server_cache::getattr(extent_protocol::extentid_t id, std::string cid, extent_protocol::attr &a)
 {
-#ifdef LOCK_TEST
   pthread_mutex_lock(&lock);
-#endif
-#ifdef DEBUG
-  tprintf("extent_server: getattr %llu start\n", id);
-#endif
-#ifdef S_DEBUG
-  tprintf("extent_server: %s getattr %llu start\n", cid.c_str(), id);
-#endif
+
   id &= 0x7fffffff;
 
   inode_entry *ie = inode_list[id];
   VERIFY (ie != NULL);
 
   if (ie->stat == EXCLUSIVE && ie->writer != cid) {
-    // revoke dirty data in writer's cache and let client wait
-    int r;
-    // VERIFY (ie->reader_queue.empty());
-    // ie->reader_queue.push_back(cid);
-#ifdef DEBUG
-    tprintf("extent_server: %s getattr %lld --> revoke from %s\n", cid.c_str(), id, ie->writer.c_str());
-#endif
-#ifdef LOCK_TEST
+    // revoke dirty data in writer's cache
+    std::string buf;
     pthread_mutex_unlock(&lock);
-#endif
-    handle(ie->writer).safebind()->call(rextent_protocol::revoke, id, r);
-#ifdef LOCK_TEST
+    handle(ie->writer).safebind()->call(rextent_protocol::revoke, id, buf);
     pthread_mutex_lock(&lock);
-#endif
+
+    // write data onto disk
+    const char * cbuf = buf.c_str();
+    int size = buf.size();
+    im->write_file(id, cbuf, size);
+
+    ie->stat = SHARED;
   }
 
   // read attr from disk
@@ -266,26 +168,14 @@ int extent_server_cache::getattr(extent_protocol::extentid_t id, std::string cid
   memset(&attr, 0, sizeof(attr));
   im->getattr(id, attr);
   a = attr;
-#ifdef S_DEBUG
-  tprintf("extent_server: %s getattr %llu end\n", cid.c_str(),id);
-#endif
-#ifdef DEBUG
-  tprintf("extent_server: getattr %llu end\n", id);
-#endif
-#ifdef LOCK_TEST
   pthread_mutex_unlock(&lock);
-#endif
   return extent_protocol::OK;
 }
 
 int extent_server_cache::remove(extent_protocol::extentid_t id, std::string cid, int &)
 {
-#ifdef LOCK_TEST
   pthread_mutex_unlock(&lock);
-#endif
-#ifdef DEBUG
-  tprintf("extent_server: write %lld\n", id);
-#endif
+
   id &= 0x7fffffff;
   im->remove_file(id);
 
@@ -298,29 +188,19 @@ int extent_server_cache::remove(extent_protocol::extentid_t id, std::string cid,
   if (ie->stat == EXCLUSIVE) {
     // send invalid to writer except the requestig client, which already invalid itself locally
     if (ie->writer != cid) {
-#ifdef LOCK_TEST
       pthread_mutex_unlock(&lock);
-#endif
       handle(ie->writer).safebind()->call(rextent_protocol::invalid, id, r);
-#ifdef LOCK_TEST
       pthread_mutex_lock(&lock);
-#endif
     }
   } else {
     while (!ie->reader_queue.empty()) {
       std::string rid = ie->reader_queue.front();
+
       // send invalid to reader except the requesting client, which already invalid itself locally
       if (rid != cid) {
-#ifdef DEBUG
-        tprintf("extent_server: %s remove %llu --> invalid %s\n", cid.c_str(), id, rid.c_str());
-#endif
-#ifdef LOCK_TEST
         pthread_mutex_unlock(&lock);
-#endif
         handle(rid).safebind()->call(rextent_protocol::invalid, id, r);
-#ifdef LOCK_TEST
         pthread_mutex_lock(&lock);
-#endif
       }
       ie->reader_queue.pop_front();
     }
@@ -328,9 +208,7 @@ int extent_server_cache::remove(extent_protocol::extentid_t id, std::string cid,
 
   // remove inode cache entry on server
   delete inode_list[id];
-#ifdef LOCK_TEST
   pthread_mutex_unlock(&lock);
-#endif
   return extent_protocol::OK;
 }
 
